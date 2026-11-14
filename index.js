@@ -19,6 +19,8 @@ import { SlashCommandEnumValue } from '../../../slash-commands/SlashCommandEnumV
 const MODULE = 'requesty';
 const SECRET_LABEL = 'Requesty';
 const CUSTOM_SOURCE = 'custom';
+/** Value of the virtual "Requesty" entry in the Chat Completion Source dropdown. */
+const REQUESTY_SOURCE = 'requesty';
 
 const REGIONS = {
     global: 'https://router.requesty.ai/v1',
@@ -48,6 +50,8 @@ const defaultSettings = Object.freeze({
     attribution: true,
     traceByChat: false,
     tags: '',
+    /** Custom source settings that were in place before switching to Requesty. */
+    prevCustom: null,
 });
 
 /** @type {any[]} */
@@ -139,11 +143,14 @@ function isRequestyUrl(url) {
     return REQUESTY_URL_RE.test(String(url ?? '').trim());
 }
 
+/** Whether the Chat Completion source is set up as Requesty (Custom source + Requesty URL). */
+function isRequestySource() {
+    return oai_settings.chat_completion_source === CUSTOM_SOURCE && isRequestyUrl(oai_settings.custom_url);
+}
+
 /** Whether SillyTavern is currently connected through Requesty. */
 function isRequestyActive() {
-    return main_api === 'openai'
-        && oai_settings.chat_completion_source === CUSTOM_SOURCE
-        && isRequestyUrl(oai_settings.custom_url);
+    return main_api === 'openai' && isRequestySource();
 }
 
 function findModel(id) {
@@ -210,9 +217,14 @@ async function saveKey(value) {
 
     if (isRequestyActive()) {
         await ensureSecretActive();
+        $('#api_button_openai').trigger('click');
     }
     updateKeyState();
     await loadModels(true);
+}
+
+function getActiveCustomSecretId() {
+    return getCustomSecrets().find(x => x.active)?.id ?? '';
 }
 
 /** Makes sure the Requesty key is the active key of the Custom source. */
@@ -450,7 +462,7 @@ function renderCurrentModel() {
     }
 
     const m = findModel(id);
-    const pending = !isRequestyActive() ? '<span class="requesty-pending" title="点击「使用 Requesty 连接」后生效">待连接</span>' : '';
+    const pending = !isRequestyActive() ? '<span class="requesty-pending" title="在「聊天补全来源」中选择 Requesty 后生效">未启用</span>' : '';
 
     if (!m) {
         container.html(`
@@ -527,49 +539,157 @@ function selectModel(id, { silent = false } = {}) {
         eventSource.emit(event_types.CHATCOMPLETION_MODEL_CHANGED, modelId);
         if (!silent) toastr.success(`已切换到 ${modelId}`, 'Requesty', { timeOut: 2000 });
     } else if (!silent) {
-        toastr.info('已选择模型，点击「使用 Requesty 连接」后生效。', 'Requesty', { timeOut: 3000 });
+        toastr.info('已选择模型，在「聊天补全来源」中选择 Requesty 后生效。', 'Requesty', { timeOut: 3000 });
     }
 
     renderModelList();
     renderCurrentModel();
 }
 
-async function connect() {
+/* ------------------------------------------------------------------ */
+/* Virtual "Requesty" chat completion source                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Points the Custom source at Requesty. Runs synchronously inside the source
+ * <select> change event, before SillyTavern's own handler reconnects.
+ */
+function enterRequestyMode() {
     const s = settings();
-    const typedKey = String($('#requesty_key').val() ?? '').trim();
-    if (typedKey) {
-        await saveKey(typedKey);
+    if (!isRequestyUrl(oai_settings.custom_url)) {
+        // Remember the user's own Custom endpoint so "Custom" can restore it later.
+        s.prevCustom = {
+            url: String(oai_settings.custom_url ?? ''),
+            model: String(oai_settings.custom_model ?? ''),
+            secretId: getActiveCustomSecretId(),
+        };
     }
 
-    if (!findRequestySecret()) {
-        toastr.warning('请先填写并保存 Requesty API Key。', 'Requesty');
+    const url = getBaseUrl();
+    oai_settings.custom_url = url;
+    $('#custom_api_url_text').val(url);
+
+    if (s.model) {
+        oai_settings.custom_model = s.model;
+        $('#custom_model_id').val(s.model);
+    }
+    save();
+}
+
+/** Restores the user's previous Custom endpoint when they pick plain "Custom" again. */
+function leaveRequestyMode() {
+    const prev = settings().prevCustom ?? {};
+    oai_settings.custom_url = String(prev.url ?? '');
+    $('#custom_api_url_text').val(oai_settings.custom_url);
+    oai_settings.custom_model = String(prev.model ?? '');
+    $('#custom_model_id').val(oai_settings.custom_model);
+    save();
+
+    const prevSecret = getCustomSecrets().find(x => x.id === prev.secretId);
+    if (prevSecret && !prevSecret.active) {
+        // Async on purpose: rotateSecret reconnects by itself once done.
+        rotateSecret(SECRET_KEYS.CUSTOM, prevSecret.id);
+    }
+}
+
+/**
+ * Runs before SillyTavern's own change handler of the source dropdown.
+ * Turns the virtual "Requesty" option into the real Custom source.
+ */
+function onSourceChangeFirst(event) {
+    try {
+        const select = /** @type {HTMLSelectElement} */ (this);
+        if (select.value === REQUESTY_SOURCE) {
+            enterRequestyMode();
+            select.value = CUSTOM_SOURCE;
+        } else if (select.value === CUSTOM_SOURCE && event?.originalEvent?.isTrusted && isRequestyUrl(oai_settings.custom_url)) {
+            // The user deliberately picked "Custom" while Requesty was configured.
+            leaveRequestyMode();
+        }
+    } catch (error) {
+        console.error('[Requesty] Source switch failed', error);
+    }
+}
+
+/** Binds a jQuery handler so that it runs before the handlers bound earlier. */
+function bindFirst(element, type, handler) {
+    const $el = $(element);
+    $el.on(type, handler);
+    try {
+        const handlers = $._data($el[0], 'events')?.[type];
+        if (Array.isArray(handlers) && handlers.length > 1) {
+            const own = handlers.pop();
+            handlers.splice(handlers.delegateCount || 0, 0, own);
+        }
+    } catch (error) {
+        console.warn('[Requesty] Could not reorder handlers, using fallback.', error);
+    }
+}
+
+function injectSourceOption() {
+    const select = $('#chat_completion_source');
+    if (!select.length || select.find(`option[value="${REQUESTY_SOURCE}"]`).length) return;
+
+    const option = $('<option>').val(REQUESTY_SOURCE).text('Requesty');
+    // Put it alphabetically into the provider group (the one with OpenRouter).
+    const group = select.find('option[value="openrouter"]').parent();
+    const target = group.length ? group : select;
+    const next = target.children('option').toArray().find(o => o.textContent.localeCompare('Requesty', 'en', { sensitivity: 'base' }) > 0);
+    if (next) {
+        $(next).before(option);
+    } else {
+        target.append(option);
+    }
+
+    bindFirst(select, 'change', onSourceChangeFirst);
+}
+
+/** Shows "Requesty" in the dropdown and swaps the Custom form for the Requesty panel. */
+function syncSourceDisplay() {
+    const select = /** @type {HTMLSelectElement|undefined} */ ($('#chat_completion_source')[0]);
+    const requesty = isRequestySource();
+
+    if (select) {
+        if (requesty && select.value !== REQUESTY_SOURCE) {
+            select.value = REQUESTY_SOURCE;
+        } else if (!requesty && select.value === REQUESTY_SOURCE) {
+            select.value = oai_settings.chat_completion_source;
+        }
+    }
+    $('body').toggleClass('requesty-mode', requesty);
+}
+
+async function onSourceChanged() {
+    // Fallback in case our handler could not run first.
+    if (oai_settings.chat_completion_source === REQUESTY_SOURCE) {
+        $('#chat_completion_source').val(REQUESTY_SOURCE).trigger('change');
         return;
     }
 
+    syncSourceDisplay();
+    if (!isRequestyActive()) return;
+
+    applyModelLimits(findModel(String(oai_settings.custom_model ?? '')));
+    refreshAll();
+    if (!models.length) loadModels().catch(() => { /* reported inside */ });
+    await ensureSecretActive();
+    updateKeyState();
+}
+
+/** Switches SillyTavern to Requesty and connects (used by the slash command). */
+async function activateRequesty() {
     if (main_api !== 'openai') {
         $('#main_api').val('openai').trigger('change');
     }
-    if (oai_settings.chat_completion_source !== CUSTOM_SOURCE) {
-        $('#chat_completion_source').val(CUSTOM_SOURCE).trigger('change');
+    if (!isRequestySource()) {
+        $('#chat_completion_source').val(REQUESTY_SOURCE).trigger('change');
     }
-
-    $('#custom_api_url_text').val(getBaseUrl()).trigger('input');
+    if (!findRequestySecret()) {
+        toastr.warning('请先在 Requesty 面板中填写并保存 API Key。', 'Requesty');
+        return;
+    }
     await ensureSecretActive();
-
-    const model = s.model || String(oai_settings.custom_model ?? '');
-    if (model) {
-        $('#custom_model_id').val(model).trigger('input');
-        applyModelLimits(findModel(model));
-    }
-
     $('#api_button_openai').trigger('click');
-    updateStatus();
-    renderModelList();
-    renderCurrentModel();
-
-    if (!model) {
-        toastr.info('已连接 Requesty，请在列表中选择一个模型。', 'Requesty');
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -676,16 +796,8 @@ function updateKeyState() {
     }
 }
 
-function updateStatus() {
-    const active = isRequestyActive();
-    $('#requesty_status_badge')
-        .text(active ? '已启用' : '未启用')
-        .toggleClass('active', active);
-    $('#requesty_connect span').text(active ? '重新连接' : '使用 Requesty 连接');
-}
-
 function refreshAll() {
-    updateStatus();
+    syncSourceDisplay();
     updateKeyState();
     renderModelList();
     renderCurrentModel();
@@ -717,7 +829,6 @@ function bindControls() {
             saveKey($('#requesty_key').val());
         }
     });
-    $('#requesty_connect').on('click', () => connect());
     $('#requesty_refresh').on('click', () => loadModels(true));
 
     $('#requesty_region').on('change', async function () {
@@ -848,7 +959,7 @@ function registerSlashCommands() {
             name: 'requesty-connect',
             helpString: '切换到 Requesty 并连接（使用已保存的 Key 和模型）。',
             callback: async () => {
-                await connect();
+                await activateRequesty();
                 return '';
             },
         }));
@@ -866,11 +977,11 @@ async function injectPanel() {
 
     const response = await fetch(new URL('./panel.html', import.meta.url));
     const html = await response.text();
-    const anchor = $('#chat_completion_source');
-    if (anchor.length) {
-        anchor.after(html);
+    const customForm = $('#custom_form');
+    if (customForm.length) {
+        customForm.before(html);
     } else {
-        $('#extensions_settings2').append(html);
+        $('#chat_completion_source').after(html);
     }
 }
 
@@ -878,16 +989,19 @@ jQuery(async () => {
     try {
         settings();
         await injectPanel();
+        injectSourceOption();
         syncControls();
         bindControls();
         registerSlashCommands();
 
         eventSource.on(event_types.CHAT_COMPLETION_SETTINGS_READY, onChatCompletionSettingsReady);
+        eventSource.on(event_types.CHATCOMPLETION_SOURCE_CHANGED, onSourceChanged);
 
         for (const type of [
             event_types.MAIN_API_CHANGED,
-            event_types.CHATCOMPLETION_SOURCE_CHANGED,
             event_types.CHATCOMPLETION_MODEL_CHANGED,
+            event_types.CONNECTION_PROFILE_LOADED,
+            event_types.OAI_PRESET_CHANGED_AFTER,
             event_types.SETTINGS_UPDATED,
             event_types.ONLINE_STATUS_CHANGED,
             event_types.SECRET_WRITTEN,
