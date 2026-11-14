@@ -1,0 +1,111 @@
+<div id="requesty_panel" class="requesty-panel inline-drawer wide100p">
+    <div class="inline-drawer-toggle inline-drawer-header">
+        <b class="requesty-title"><i class="fa-solid fa-route"></i> Requesty</b>
+        <span id="requesty_status_badge" class="requesty-badge">未启用</span>
+        <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+    </div>
+    <div class="inline-drawer-content">
+        <div class="requesty-section">
+            <h4 class="requesty-h4">
+                <span>Requesty API Key</span>
+                <a href="https://app.requesty.ai/api-keys" target="_blank" rel="noopener noreferrer" class="requesty-link">获取 Key <i class="fa-solid fa-arrow-up-right-from-square"></i></a>
+            </h4>
+            <div class="flex-container">
+                <input id="requesty_key" class="text_pole flex1" type="password" autocomplete="off" placeholder="粘贴 Requesty API Key">
+                <div id="requesty_key_save" class="menu_button menu_button_icon" title="保存到 SillyTavern 密钥库"><i class="fa-solid fa-floppy-disk"></i><span>保存</span></div>
+            </div>
+            <small id="requesty_key_state" class="requesty-muted"></small>
+
+            <h4 class="requesty-h4">路由节点</h4>
+            <select id="requesty_region" class="text_pole">
+                <option value="global">全球 (router.requesty.ai)</option>
+                <option value="eu">欧盟 · 法兰克福 (router.eu.requesty.ai)</option>
+                <option value="us">美国 (router.us.requesty.ai)</option>
+                <option value="ap">亚太 (router.ap.requesty.ai)</option>
+            </select>
+
+            <div class="flex-container requesty-actions">
+                <div id="requesty_connect" class="menu_button menu_button_icon"><i class="fa-solid fa-plug"></i><span>使用 Requesty 连接</span></div>
+                <a href="https://app.requesty.ai" target="_blank" rel="noopener noreferrer" class="menu_button menu_button_icon requesty-link-button"><i class="fa-solid fa-chart-line"></i><span>用量与余额</span></a>
+            </div>
+            <small class="requesty-muted">连接时会自动切换到「Custom (OpenAI-compatible)」源，并填入 Requesty 地址、密钥和模型。</small>
+        </div>
+
+        <hr class="sysHR">
+
+        <div class="requesty-section">
+            <h4 class="requesty-h4">
+                <span>模型</span>
+                <span id="requesty_model_count" class="requesty-muted"></span>
+            </h4>
+            <div id="requesty_current" class="requesty-current"></div>
+
+            <div class="flex-container">
+                <input id="requesty_manual" class="text_pole flex1" type="text" autocomplete="off" placeholder="手动输入模型 ID，例如 policy/my-fallback">
+                <div id="requesty_manual_apply" class="menu_button menu_button_icon" title="使用该模型 ID"><i class="fa-solid fa-check"></i></div>
+            </div>
+
+            <div class="flex-container requesty-filters">
+                <input id="requesty_search" class="text_pole flex1" type="search" autocomplete="off" placeholder="搜索模型 / 厂商…">
+                <div id="requesty_refresh" class="menu_button menu_button_icon" title="刷新模型列表"><i class="fa-solid fa-rotate"></i></div>
+            </div>
+            <div class="flex-container requesty-filters">
+                <select id="requesty_filter_lab" class="text_pole flex1" title="模型厂商"></select>
+                <select id="requesty_filter_provider" class="text_pole flex1" title="推理服务商"></select>
+                <select id="requesty_sort" class="text_pole flex1" title="排序">
+                    <option value="name">按名称</option>
+                    <option value="price">按价格（低→高）</option>
+                    <option value="context">按上下文（大→小）</option>
+                    <option value="newest">按上架时间（新→旧）</option>
+                </select>
+            </div>
+            <div class="flex-container requesty-checks">
+                <label class="checkbox_label"><input id="requesty_only_fav" type="checkbox"><span>仅收藏</span></label>
+                <label class="checkbox_label"><input id="requesty_only_reasoning" type="checkbox"><span>支持推理</span></label>
+                <label class="checkbox_label"><input id="requesty_only_vision" type="checkbox"><span>支持识图</span></label>
+                <label class="checkbox_label"><input id="requesty_show_regional" type="checkbox"><span>显示区域变体 (@eu 等)</span></label>
+            </div>
+            <div id="requesty_model_list" class="requesty-model-list"></div>
+            <small class="requesty-muted">价格单位：美元 / 百万 token（输入 / 输出）。无前缀的模型 ID 为 Requesty 托管路由，会自动选择服务商并故障转移。</small>
+        </div>
+
+        <hr class="sysHR">
+
+        <div class="requesty-section">
+            <h4 class="requesty-h4">请求选项</h4>
+
+            <label for="requesty_context_mode">按模型调整上下文长度</label>
+            <select id="requesty_context_mode" class="text_pole">
+                <option value="clamp">仅在超过模型上限时下调（推荐）</option>
+                <option value="max">设为模型最大上下文</option>
+                <option value="off">不调整</option>
+            </select>
+
+            <label for="requesty_reasoning">推理强度 (reasoning_effort)</label>
+            <select id="requesty_reasoning" class="text_pole">
+                <option value="">不发送（模型默认）</option>
+                <option value="follow">跟随酒馆预设的「推理强度」</option>
+                <option value="none">none（关闭）</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
+                <option value="max">max</option>
+            </select>
+
+            <label for="requesty_auto_cache">自动提示词缓存 (auto_cache)</label>
+            <select id="requesty_auto_cache" class="text_pole">
+                <option value="">跟随 Requesty 默认</option>
+                <option value="on">开启（长对话更省钱）</option>
+                <option value="off">关闭</option>
+            </select>
+
+            <label class="checkbox_label"><input id="requesty_attribution" type="checkbox"><span>发送应用标识（X-Title: SillyTavern），便于在 Requesty 后台区分来源</span></label>
+            <label class="checkbox_label"><input id="requesty_trace" type="checkbox"><span>把当前聊天文件名作为 trace_id 发送（后台可按聊天聚合日志）</span></label>
+
+            <label for="requesty_tags">请求标签 tags（逗号分隔，可留空）</label>
+            <input id="requesty_tags" class="text_pole" type="text" autocomplete="off" placeholder="例如：sillytavern, roleplay">
+            <small class="requesty-muted">这些选项只在当前连接地址是 Requesty 时生效，会与 Custom 源里你自己填写的「Include Body / Headers」合并，你手写的同名字段优先。</small>
+        </div>
+    </div>
+</div>
